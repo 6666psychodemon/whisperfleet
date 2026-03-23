@@ -1,11 +1,35 @@
 import streamlit as st
 from groq import Groq
 
-# Page setup - minimalist style
+# Конфиг страницы
 st.set_page_config(page_title="whisperfleet", page_icon="🎙️")
+
+# CSS для кастомизации: прячем кнопку и стилизуем зону загрузки
+st.markdown("""
+    <style>
+    /* Прячем стандартную кнопку 'Browse files' */
+    section[data-testid="stFileUploader"] button {
+        display: none;
+    }
+    /* Делаем текст внутри зоны чуть больше и центрируем */
+    section[data-testid="stFileUploader"] label {
+        font-size: 1.2rem;
+        margin-bottom: 10px;
+        color: #ff4b4b; /* Цвет можно поменять */
+    }
+    /* Инструкция про форматы и вес */
+    .file-info {
+        font-size: 0.85rem;
+        color: #888;
+        margin-top: -10px;
+        margin-bottom: 20px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🎙️ whisperfleet")
 
-# Grab the key from secrets
+# API Key
 api_key = st.secrets.get("GROQ_API_KEY")
 if not api_key:
     st.error("Missing GROQ_API_KEY in Secrets.")
@@ -13,25 +37,26 @@ if not api_key:
 
 client = Groq(api_key=api_key)
 
-# The Russian-labeled uploader
+# Основной интерфейс
+st.markdown('<p class="file-info">Поддерживаются mp3, wav, m4a, flac до 25MB</p>', unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader(
     "Кидай файл сюда или нажми для выбора на диске", 
-    type=["mp3", "wav", "m4a", "flac"]
+    type=["mp3", "wav", "m4a", "flac"],
+    label_visibility="visible"
 )
 
 if uploaded_file:
-    # Check file size (Groq hard limit)
     file_size_mb = uploaded_file.size / (1024 * 1024)
     
     if file_size_mb > 25:
-        st.error(f"Файл слишком большой ({file_size_mb:.1f}MB). Лимит — 25MB.")
+        st.error(f"Файл слишком тяжелый ({file_size_mb:.1f}MB). Лимит — 25MB.")
     else:
-        # Only transcribe if we haven't already processed this specific file
-        # This saves tokens and time
+        # Логика транскрибации с защитой от повторных запусков
         file_id = f"{uploaded_file.name}_{uploaded_file.size}"
         
         if "last_file_id" not in st.session_state or st.session_state.last_file_id != file_id:
-            with st.spinner("Распознаю голос..."):
+            with st.spinner("Слушаю..."):
                 try:
                     transcription = client.audio.transcriptions.create(
                         file=(uploaded_file.name, uploaded_file.read()),
@@ -42,10 +67,10 @@ if uploaded_file:
                     st.session_state.transcript = transcription
                     st.session_state.last_file_id = file_id
                 except Exception as e:
-                    st.error(f"Ошибка: {e}")
+                    st.error(f"Ошибка API: {e}")
                     st.stop()
 
-        # Display result
+        # Результат
         st.success("Готово")
         st.text_area("Текст:", value=st.session_state.transcript, height=400)
         
