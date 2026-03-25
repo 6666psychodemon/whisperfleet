@@ -1,96 +1,69 @@
 import streamlit as st
-from groq import Groq
-import streamlit.components.v1 as components
+import sqlite3
+import pandas as pd
 
-st.set_page_config(page_title="whisperfleet", page_icon="🎙️")
+st.set_page_config(page_title="Underground Type Beat Directory", layout="wide")
 
-# CSS для глубокой кастомизации интерфейса
-st.markdown("""
-    <style>
-    /* 1. Прячем стандартный текст и кнопку внутри загрузчика */
-    [data-testid="stFileUploader"] section button { display: none; }
-    [data-testid="stFileUploader"] section div[data-testid="stMarkdownContainer"] { display: none; }
+st.title("🎧 Underground Type Beat Directory")
+st.markdown("Discovering fresh sounds. Ignoring the mainstream.")
+
+# 1. Database Connection
+def load_data():
+    conn = sqlite3.connect("typebeats.db")
+    # Load all columns from the new 10-column schema
+    df = pd.read_sql_query("SELECT * FROM beats", conn)
+    conn.close()
+    return df
+
+try:
+    df = load_data()
+
+    # --- SIDEBAR FILTERS ---
+    st.sidebar.header("Filters")
     
-    /* 2. Вставляем твой текст (1) вместо (2) прямо внутрь рамки */
-    [data-testid="stFileUploader"] section::before {
-        content: "Кидай файл сюда или нажми для выбора на диске";
-        display: block;
-        text-align: center;
-        color: #E0E0E0;
-        font-size: 1.1rem;
-        padding: 40px 20px;
-        cursor: pointer;
-    }
+    # Genre Filter
+    genres = sorted(df['genre'].unique().tolist()) if 'genre' in df.columns else []
+    selected_genre = st.sidebar.multiselect("Select Genre", genres)
 
-    /* 3. Убираем лишние отступы у заголовка и инфо-текста */
-    .stApp { background-color: #0E1117; }
-    .small-info {
-        font-size: 0.8rem;
-        color: #666;
-        margin-bottom: 20px;
-    }
+    # View Count Filter
+    max_views = st.sidebar.slider("Max Views", 0, 100000, 100000)
+
+    # NEW: Free Filter
+    show_free_only = st.sidebar.checkbox("Show Free Beats Only")
+
+    # --- FILTER LOGIC ---
+    filtered = df[df['views'] <= max_views]
     
-    /* Убираем заголовок "Текст:" у поля */
-    [data-testid="stTextArea"] label { display: none; }
-    </style>
-""", unsafe_allow_html=True)
-
-st.title("🎙️ whisperfleet")
-st.markdown('<p class="small-info">mp3, wav, m4a, flac до 25MB</p>', unsafe_allow_html=True)
-
-api_key = st.secrets.get("GROQ_API_KEY")
-client = Groq(api_key=api_key)
-
-# Загрузчик без внешнего лейбла (он теперь внутри через CSS)
-uploaded_file = st.file_uploader("", type=["mp3", "wav", "m4a", "flac"])
-
-if uploaded_file:
-    file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+    if selected_genre:
+        filtered = filtered[filtered['genre'].isin(selected_genre)]
     
-    if "last_file_id" not in st.session_state or st.session_state.last_file_id != file_id:
-        with st.spinner(" "):
-            try:
-                transcription = client.audio.transcriptions.create(
-                    file=(uploaded_file.name, uploaded_file.read()),
-                    model="whisper-large-v3",
-                    language="ru",
-                    response_format="text"
-                )
-                st.session_state.transcript = transcription
-                st.session_state.last_file_id = file_id
-            except Exception as e:
-                st.error(f"Ошибка: {e}")
-                st.stop()
+    if show_free_only:
+        filtered = filtered[filtered['is_free'] == 1]
 
-    if "transcript" in st.session_state:
-        # Кнопка копирования через JavaScript
-        copy_code = f"""
-        <script>
-        function copyToClipboard() {{
-            const text = `{st.session_state.transcript}`;
-            navigator.clipboard.writeText(text).then(() => {{
-                const btn = document.getElementById("copyBtn");
-                btn.innerText = "Скопировано!";
-                btn.style.backgroundColor = "#28a745";
-            }});
-        }}
-        </script>
-        <button id="copyBtn" onclick="copyToClipboard()" style="
-            width: 100%;
-            background-color: #ff4b4b;
-            color: white;
-            border: none;
-            padding: 10px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            margin-bottom: 10px;
-        ">В буфер</button>
-        """
-        components.html(copy_code, height=50)
+    # --- DISPLAY ---
+    st.subheader(f"Found {len(filtered)} tracks")
 
-        # Поле с текстом (без подписи "Текст:")
-        st.text_area("", value=st.session_state.transcript, height=350)
-        
-        # Скромная кнопка скачивания внизу
-        st.download_button("Скачать .txt", st.session_state.transcript, file_name="text.txt")
+    # We use 'published_time' here instead of 'upload_time_raw' to fix the error
+    cols_to_show = ["artist_style", "channel_name", "views", "published_time", "url"]
+    
+    # Check for 'is_free' column to add a visual indicator
+    if "is_free" in filtered.columns:
+        filtered['Free?'] = filtered['is_free'].apply(lambda x: "✅" if x == 1 else "❌")
+        cols_to_show.insert(4, "Free?")
+
+    display_df = filtered[cols_to_show].sort_values(by="views", ascending=True)
+
+    # Make URL clickable
+    st.dataframe(
+        display_df,
+        column_config={
+            "url": st.column_config.LinkColumn("YouTube Link"),
+            "views": st.column_config.NumberColumn("Views", format="%d")
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+
+except Exception as e:
+    st.error(f"Waiting for data... (Error: {e})")
+    st.info("Make sure you've run scraper.py and tagger.py at least once.")
